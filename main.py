@@ -75,7 +75,7 @@ def parse_with_gemini(text):
 def main():
     print("Подключение к Гугл Таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) 
+    existing_links = sheet.col_values(11) # Столбец K со ссылками
     
     print("Получение файлов из Битрикс24...")
     files = get_bitrix_files()
@@ -95,7 +95,7 @@ def main():
         if not filename.lower().endswith(('.pdf', '.jpg', '.jpeg', '.png')):
             continue
             
-        print(f"\nНачинаем обработку: {filename}")
+        print(f"\nОбработка файла: {filename}")
         try:
             with open(filename, 'wb') as f:
                 f.write(requests.get(download_url).content)
@@ -110,9 +110,14 @@ def main():
                 os.remove(filename)
             continue
             
+        print("Распознавание данных через Gemini...")
         parsed_data = parse_with_gemini(raw_text)
         
+        # Вычисляем следующий номер по порядку
         next_num = len(sheet.col_values(1)) 
+        
+        # Формируем строку строго по колонкам таблицы:
+        # A: №п/п, B: дата, C: материал, D: поставщик, E: кол-во, F: № паспорта, G-J: пусто, K: ссылка
         new_row = [
             next_num, 
             parsed_data.get("date", ""), 
@@ -125,12 +130,12 @@ def main():
         ]
         
         sheet.append_row(new_row)
-        print(f"Успешно добавлено в таблицу: {parsed_data.get('material')}")
+        print(f"Успешно записано в таблицу: {parsed_data.get('material')}")
         
         if os.path.exists(filename):
             os.remove(filename)
             
-    print("\nПроверка завершена!")
+    print("\nГотово! Все файлы обработаны.")
 
 if __name__ == '__main__':
     main()
