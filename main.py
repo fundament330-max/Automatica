@@ -75,7 +75,7 @@ def parse_with_gemini(text):
 def main():
     print("Подключение к Гугл Таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) # Столбец K со ссылками
+    existing_links = sheet.col_values(11) # Столбец K
     
     print("Получение файлов из Битрикс24...")
     files = get_bitrix_files()
@@ -113,29 +113,24 @@ def main():
         print("Распознавание данных через Gemini...")
         parsed_data = parse_with_gemini(raw_text)
         
-        # Вычисляем следующий номер по порядку
-        next_num = len(sheet.col_values(1)) 
+        # Определяем номер новой строки
+        next_row = len(sheet.col_values(1)) + 1
         
-        # Формируем строку строго по колонкам таблицы:
-        # A: №п/п, B: дата, C: материал, D: поставщик, E: кол-во, F: № паспорта, G-J: пусто, K: ссылка
-        new_row = [
-            next_num, 
-            parsed_data.get("date", ""), 
-            parsed_data.get("material", ""), 
-            parsed_data.get("supplier", ""), 
-            parsed_data.get("quantity", ""), 
-            parsed_data.get("passport_no", ""), 
-            "", "", "", "", 
-            file_url
-        ]
+        # Точечно записываем данные по конкретным колонкам:
+        sheet.update_cell(next_row, 1, next_row - 1)                  # A: № п/п
+        sheet.update_cell(next_row, 2, parsed_data.get("date", ""))       # B: Дата поступления
+        sheet.update_cell(next_row, 3, parsed_data.get("material", ""))   # C: Наименование материала
+        sheet.update_cell(next_row, 4, parsed_data.get("supplier", ""))   # D: Поставщик
+        sheet.update_cell(next_row, 5, parsed_data.get("quantity", ""))   # E: Кол-во, ед. изм
+        sheet.update_cell(next_row, 6, parsed_data.get("passport_no", ""))# F: № паспорта
+        sheet.update_cell(next_row, 11, file_url)                         # K: Ссылка на документ
         
-        sheet.append_row(new_row)
-        print(f"Успешно записано в таблицу: {parsed_data.get('material')}")
+        print(f"Успешно записано: {parsed_data.get('material')}")
         
         if os.path.exists(filename):
             os.remove(filename)
             
-    print("\nГотово! Все файлы обработаны.")
+    print("\nГотово!")
 
 if __name__ == '__main__':
     main()
