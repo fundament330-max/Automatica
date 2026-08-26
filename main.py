@@ -21,7 +21,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def init_google_sheets():
-    with open("google_creds.json", "w") as f:
+    with open_by_url("google_creds.json", "w") as f:
         f.write(GOOGLE_CREDS_JSON)
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
