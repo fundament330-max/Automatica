@@ -26,7 +26,6 @@ def init_google_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
     client = gspread.authorize(creds)
-    
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_bitrix_files():
@@ -44,93 +43,61 @@ def extract_text(filename):
         elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             text = pytesseract.image_to_string(Image.open(filename), lang='rus')
     except Exception as e:
-        print(f"Ошибка OCR при чтении {filename}: {e}")
+        print(f"Ошибка OCR: {e}")
     return text
 
 def parse_with_gemini(text):
     prompt = """
-    Ты — помощник инженера ПТО. Извлеки данные из текста паспорта качества на строительный материал.
-    Ответь ТОЛЬКО в формате JSON. Не пиши никаких пояснений.
+    Извлеки данные из текста паспорта качества. Ответь ТОЛЬКО в формате JSON.
     Если данных нет, ставь пустую строку "".
-    
-    Структура JSON:
     {
-      "date": "Дата документа в формате ДД.ММ.ГГГГ",
-      "material": "Полное наименование материала",
-      "supplier": "Название организации поставщика",
-      "quantity": "Количество и единицы измерения",
-      "passport_no": "Номер паспорта или сертификата"
+      "date": "Дата документа ДД.ММ.ГГГГ",
+      "material": "Наименование материала",
+      "supplier": "Поставщик",
+      "quantity": "Количество и ед. изм",
+      "passport_no": "Номер паспорта"
     }
-    
-    Текст:
-    """
+    Текст: """
     try:
         response = model.generate_content(prompt + text)
         result = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(result)
-    except Exception as e:
-        print(f"Ошибка парсинга: {e}")
+    except:
         return {"date": "", "material": "", "supplier": "", "quantity": "", "passport_no": ""}
 
 def main():
-    print("Подключение к Гугл Таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) # Столбец K
-    
-    print("Получение файлов из Битрикс24...")
+    existing_links = sheet.col_values(11) 
     files = get_bitrix_files()
     
     for file_info in files:
-        filename = file_info.get("NAME", "Без_имени")
-        file_url = file_info.get("DETAIL_URL", "")
+        filename = file_info.get("NAME")
+        file_url = file_info.get("DETAIL_URL")
         download_url = file_info.get("DOWNLOAD_URL")
         
-        if not download_url:
+        if not download_url or file_url in existing_links or not filename.lower().endswith(('.pdf', '.jpg', '.png', '.jpeg')):
             continue
             
-        if file_url in existing_links:
-            print(f"Пропуск {filename} (уже в реестре)")
-            continue
-            
-        if not filename.lower().endswith(('.pdf', '.jpg', '.jpeg', '.png')):
-            continue
-            
-        print(f"\nОбработка файла: {filename}")
-        try:
-            with open(filename, 'wb') as f:
-                f.write(requests.get(download_url).content)
-        except Exception as e:
-            print(f"Ошибка скачивания {filename}: {e}")
-            continue
+        with open(filename, 'wb') as f:
+            f.write(requests.get(download_url).content)
             
         raw_text = extract_text(filename)
-        if not raw_text.strip():
-            print(f"Текст не распознан для {filename}")
-            if os.path.exists(filename):
-                os.remove(filename)
-            continue
-            
-        print("Распознавание данных через Gemini...")
         parsed_data = parse_with_gemini(raw_text)
         
-        # Определяем номер новой строки
-        next_row = len(sheet.col_values(1)) + 1
+        # Ищем первую пустую строку в таблице
+        all_col_a = sheet.col_values(1)
+        next_row = len(all_col_a) + 1
         
-        # Точечно записываем данные по конкретным колонкам:
-        sheet.update_cell(next_row, 1, next_row - 1)                  # A: № п/п
-        sheet.update_cell(next_row, 2, parsed_data.get("date", ""))       # B: Дата поступления
-        sheet.update_cell(next_row, 3, parsed_data.get("material", ""))   # C: Наименование материала
-        sheet.update_cell(next_row, 4, parsed_data.get("supplier", ""))   # D: Поставщик
-        sheet.update_cell(next_row, 5, parsed_data.get("quantity", ""))   # E: Кол-во, ед. изм
-        sheet.update_cell(next_row, 6, parsed_data.get("passport_no", ""))# F: № паспорта
-        sheet.update_cell(next_row, 11, file_url)                         # K: Ссылка на документ
+        # Заполняем ячейки по порядку (A, B, C, D, E, F, K)
+        sheet.update_cell(next_row, 1, next_row - 1)
+        sheet.update_cell(next_row, 2, parsed_data.get("date", ""))
+        sheet.update_cell(next_row, 3, parsed_data.get("material", ""))
+        sheet.update_cell(next_row, 4, parsed_data.get("supplier", ""))
+        sheet.update_cell(next_row, 5, parsed_data.get("quantity", ""))
+        sheet.update_cell(next_row, 6, parsed_data.get("passport_no", ""))
+        sheet.update_cell(next_row, 11, file_url)
         
-        print(f"Успешно записано: {parsed_data.get('material')}")
-        
-        if os.path.exists(filename):
-            os.remove(filename)
-            
-    print("\nГотово!")
+        os.remove(filename)
 
 if __name__ == '__main__':
     main()
