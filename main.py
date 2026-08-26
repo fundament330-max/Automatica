@@ -26,7 +26,7 @@ def init_google_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
     client = gspread.authorize(creds)
-    return client.open(GOOGLE_SHEET_NAME).sheet1
+    return client.open("https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit?gid=0#gid=0").sheet1
 
 def get_bitrix_files():
     url = f"{BITRIX_WEBHOOK}disk.folder.getchildren"
