@@ -82,9 +82,13 @@ def main():
     files = get_bitrix_files()
     
     for file_info in files:
-        filename = file_info["NAME"]
-        file_url = file_info["DETAIL_URL"]
-        download_url = file_info["DOWNLOAD_URL"]
+        filename = file_info.get("NAME", "Без_имени")
+        file_url = file_info.get("DETAIL_URL", "")
+        download_url = file_info.get("DOWNLOAD_URL")
+        
+        # Если это папка или нет ссылки на скачивание — пропускаем
+        if not download_url:
+            continue
         
         if file_url in existing_links:
             print(f"Пропуск {filename} (уже в реестре)")
