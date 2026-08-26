@@ -48,10 +48,11 @@ def extract_text(filename):
 
 def parse_with_gemini(text):
     prompt = """
-    Извлеки данные из текста паспорта качества. Ответь ТОЛЬКО в формате JSON.
+    Извлеки данные из текста паспорта качества на строительный материал.
+    Ответь ТОЛЬКО в формате JSON. Без лишнего текста.
     Если данных нет, ставь пустую строку "".
     {
-      "date": "Дата документа ДД.ММ.ГГГГ",
+      "date": "Дата документа в формате ДД.ММ.ГГГГ",
       "material": "Наименование материала",
       "supplier": "Поставщик",
       "quantity": "Количество и ед. изм",
@@ -84,19 +85,21 @@ def main():
         raw_text = extract_text(filename)
         parsed_data = parse_with_gemini(raw_text)
         
-        # Ищем первую пустую строку в таблице
-        all_col_a = sheet.col_values(1)
-        next_row = len(all_col_a) + 1
+        next_num = len(sheet.col_values(1))
         
-        # Заполняем ячейки по порядку (A, B, C, D, E, F, K)
-        sheet.update_cell(next_row, 1, next_row - 1)
-        sheet.update_cell(next_row, 2, parsed_data.get("date", ""))
-        sheet.update_cell(next_row, 3, parsed_data.get("material", ""))
-        sheet.update_cell(next_row, 4, parsed_data.get("supplier", ""))
-        sheet.update_cell(next_row, 5, parsed_data.get("quantity", ""))
-        sheet.update_cell(next_row, 6, parsed_data.get("passport_no", ""))
-        sheet.update_cell(next_row, 11, file_url)
+        # Собираем всю строку целиком от A до K и отправляем одним пакетом
+        row_data = [
+            next_num,
+            parsed_data.get("date", ""),
+            parsed_data.get("material", ""),
+            parsed_data.get("supplier", ""),
+            parsed_data.get("quantity", ""),
+            parsed_data.get("passport_no", ""),
+            "", "", "", "",
+            file_url
+        ]
         
+        sheet.append_row(row_data)
         os.remove(filename)
 
 if __name__ == '__main__':
