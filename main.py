@@ -9,7 +9,6 @@ from pdf2image import convert_from_path
 from PIL import Image
 
 # ================= НАСТРОЙКИ =================
-# Жестко прописываем вебхук напрямую, в обход секретов GitHub
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
 FOLDER_ID = "131672" 
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
@@ -82,18 +81,13 @@ def main():
     files = get_bitrix_files()
     
     for file_info in files:
-       filename = file_info.get("NAME", "Без_имени")
+        filename = file_info.get("NAME", "Без_имени")
         file_url = file_info.get("DETAIL_URL", "")
         download_url = file_info.get("DOWNLOAD_URL")
         
-        # Если это папка или нет ссылки на скачивание — пропускаем
         if not download_url:
             continue
-        
-        # Если это папка или нет ссылки на скачивание — пропускаем
-        if not download_url:
-            continue
-        
+            
         if file_url in existing_links:
             print(f"Пропуск {filename} (уже в реестре)")
             continue
