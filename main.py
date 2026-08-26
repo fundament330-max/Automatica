@@ -9,12 +9,11 @@ from pdf2image import convert_from_path
 from PIL import Image
 
 # ================= НАСТРОЙКИ =================
-BITRIX_WEBHOOK = "[https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/](https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/)"
-FOLDER_ID = "131672" # Твой ID папки в Битрикс24
+# Жестко прописываем вебхук напрямую, в обход секретов GitHub
+BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
+FOLDER_ID = "131672" 
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Прямая ссылка на твою таблицу
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
 # ==============================================
 
@@ -22,7 +21,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def init_google_sheets():
-    # 1. Записываем скачанные ключи в локальный файл (используем стандартный open)
     with open("google_creds.json", "w") as f:
         f.write(GOOGLE_CREDS_JSON)
         
@@ -30,14 +28,9 @@ def init_google_sheets():
     creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
     client = gspread.authorize(creds)
     
-    # 2. Открываем таблицу в интернете по прямой ссылке (используем open_by_url)
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_bitrix_files():
-    if not BITRIX_WEBHOOK:
-        print("Ошибка: BITRIX_WEBHOOK не найден")
-        return []
-        
     url = f"{BITRIX_WEBHOOK}disk.folder.getchildren"
     response = requests.post(url, json={"id": FOLDER_ID})
     return response.json().get("result", [])
@@ -83,7 +76,7 @@ def parse_with_gemini(text):
 def main():
     print("Подключение к Гугл Таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) # Проверяем ссылки в столбце K
+    existing_links = sheet.col_values(11) 
     
     print("Получение файлов из Битрикс24...")
     files = get_bitrix_files()
@@ -93,7 +86,6 @@ def main():
         file_url = file_info["DETAIL_URL"]
         download_url = file_info["DOWNLOAD_URL"]
         
-        # Если файл уже есть в реестре или это не картинка/pdf — пропускаем
         if file_url in existing_links:
             print(f"Пропуск {filename} (уже в реестре)")
             continue
@@ -118,7 +110,7 @@ def main():
             
         parsed_data = parse_with_gemini(raw_text)
         
-        next_num = len(sheet.col_values(1)) # Вычисляем следующий номер
+        next_num = len(sheet.col_values(1)) 
         new_row = [
             next_num, 
             parsed_data.get("date", ""), 
@@ -133,7 +125,6 @@ def main():
         sheet.append_row(new_row)
         print(f"Успешно добавлено в таблицу: {parsed_data.get('material')}")
         
-        # Удаляем скачанный файл с облачного сервера
         if os.path.exists(filename):
             os.remove(filename)
             
