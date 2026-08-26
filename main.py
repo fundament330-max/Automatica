@@ -79,7 +79,7 @@ def main():
             continue
             
         print(f"Обработка {filename}...")
-        with open(filename, 'wb') as f:
+        with open("google_creds.json", "w") as f:
             f.write(requests.get(download_url).content)
             
         raw_text = extract_text(filename)
