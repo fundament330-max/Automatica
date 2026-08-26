@@ -9,7 +9,7 @@ from pdf2image import convert_from_path
 from PIL import Image
 
 # ================= НАСТРОЙКИ =================
-BITRIX_WEBHOOK = os.environ.get("BITRIX_WEBHOOK")
+BITRIX_WEBHOOK = "[https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/](https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/)"
 FOLDER_ID = "131672" # Твой ID папки в Битрикс24
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
