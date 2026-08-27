@@ -10,7 +10,8 @@ import google.generativeai as genai
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
 ROOT_FOLDER_ID = "131672" # Корневая папка ПТО
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Защита от случайных пробелов при копировании ключа
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
 # ==============================================
 
@@ -25,8 +26,8 @@ def init_google_sheets():
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_folder_id_by_path(webhook, root_id):
-    """Автоматически ищет нужную папку «ЦОД А» по иерархии"""
-    target_path = ["5. ПАСПОРТА", "Конструкции железобетонные", "Бетон", "ЦОД А"]
+    """Ищет папки по частичному совпадению, чтобы не спотыкаться о пробелы"""
+    target_path = ["ПАСПОРТА", "Конструкции железобетонные", "Бетон", "ЦОД А"]
     current_id = root_id
     
     for folder_name in target_path:
@@ -36,16 +37,17 @@ def get_folder_id_by_path(webhook, root_id):
         
         found = False
         for item in items:
-            # Ищем совпадение по имени (без учета регистра и пробелов)
-            if item.get("NAME", "").strip().lower() == folder_name.lower():
+            if folder_name.lower() in item.get("NAME", "").lower():
                 current_id = item.get("ID")
                 found = True
+                print(f"📁 Нашли папку: {item.get('NAME')}")
                 break
+                
         if not found:
-            print(f"Не удалось найти папку: {folder_name}. Берем текущую корневую.")
+            print(f"❌ Не удалось найти папку со словом: {folder_name}. Остаемся в текущей.")
             break
             
-    print(f"🎯 Итоговый ID найденной папки: {current_id}")
+    print(f"🎯 Итоговый ID папки для сканирования: {current_id}")
     return current_id
 
 def parse_pdf_with_gemini(filename):
@@ -69,6 +71,7 @@ def parse_pdf_with_gemini(filename):
             if file_info.state.name == 'PROCESSING':
                 time.sleep(2)
             elif file_info.state.name == 'FAILED':
+                print(f"Ошибка на сервере Гугла при обработке {filename}")
                 return {}
             else:
                 break
@@ -137,7 +140,7 @@ def main():
         if os.path.exists(filename):
             os.remove(filename)
             
-    print("\nГотово! Файлы из папки ЦОД А обработаны.")
+    print("\nГотово! Файлы обработаны.")
 
 if __name__ == '__main__':
     main()
