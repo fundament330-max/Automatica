@@ -2,20 +2,16 @@ import os
 import json
 import requests
 import gspread
-import time
+import base64
 from oauth2client.service_account import ServiceAccountCredentials
-import google.generativeai as genai
 
 # ================= НАСТРОЙКИ =================
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
-ROOT_FOLDER_ID = "131672" # Корневая папка ПТО
+ROOT_FOLDER_ID = "131672" 
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
-# Защита от случайных пробелов при копировании ключа
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
 # ==============================================
-
-genai.configure(api_key=GEMINI_API_KEY)
 
 def init_google_sheets():
     with open("google_creds.json", "w") as f:
@@ -26,8 +22,8 @@ def init_google_sheets():
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_folder_id_by_path(webhook, root_id):
-    """Ищет папки по частичному совпадению, чтобы не спотыкаться о пробелы"""
-    target_path = ["ПАСПОРТА", "Конструкции железобетонные", "Бетон", "ЦОД А"]
+    # ИЩЕМ СТРОГО ПО НАЗВАНИЮ, чтобы не залезть в "Паспорта с ошибками"
+    target_path = ["5. ПАСПОРТА", "1. Конструкции железобетонные", "Бетон", "ЦОД А"]
     current_id = root_id
     
     for folder_name in target_path:
@@ -37,56 +33,70 @@ def get_folder_id_by_path(webhook, root_id):
         
         found = False
         for item in items:
-            if folder_name.lower() in item.get("NAME", "").lower():
+            if item.get("NAME", "").strip().lower() == folder_name.lower():
                 current_id = item.get("ID")
                 found = True
                 print(f"📁 Нашли папку: {item.get('NAME')}")
                 break
                 
         if not found:
-            print(f"❌ Не удалось найти папку со словом: {folder_name}. Остаемся в текущей.")
+            print(f"❌ Не удалось найти точную папку: {folder_name}")
             break
             
     print(f"🎯 Итоговый ID папки для сканирования: {current_id}")
     return current_id
 
-def parse_pdf_with_gemini(filename):
+def parse_pdf_direct(filename):
     prompt = """
-    Ты профессиональный инженер ПТО. Проанализируй этот документ (паспорт качества или сертификат).
+    Ты инженер ПТО. Проанализируй этот документ.
     Извлеки и верни строго JSON объект с полями:
     - "date": дата документа (ДД.ММ.ГГГГ или ГГГГ.ММ.ДД).
-    - "material": точное наименование материала или изделия.
-    - "supplier": завод-изготовитель или поставщик (только название организации).
-    - "quantity": ТОЛЬКО количественное значение с единицей измерения (например: "50 шт", "12.5 м3", "300 т"). Только цифры и единица, без лишних слов.
-    - "passport_no": ТОЛЬКО номер паспорта или сертификата (конкретная цифра или буквенно-цифровой индекс, например "4278", "№ 54"). Никаких слов вроде "Соответствия".
-
-    Если параметра нет, оставь "". Ответ строго в формате JSON.
+    - "material": точное наименование материала.
+    - "supplier": завод-изготовитель или поставщик.
+    - "quantity": ТОЛЬКО количественное значение с единицей измерения.
+    - "passport_no": ТОЛЬКО номер паспорта или сертификата.
+    Если параметра нет, оставь "". Ответ строго в формате JSON без разметки markdown.
     """
     try:
-        print(f"Загружаем {filename} для анализа ИИ...")
-        uploaded_file = genai.upload_file(path=filename)
+        with open(filename, "rb") as f:
+            pdf_data = f.read()
+            
+        pdf_b64 = base64.b64encode(pdf_data).decode('utf-8')
         
-        while True:
-            file_info = genai.get_file(uploaded_file.name)
-            if file_info.state.name == 'PROCESSING':
-                time.sleep(2)
-            elif file_info.state.name == 'FAILED':
-                print(f"Ошибка на сервере Гугла при обработке {filename}")
-                return {}
-            else:
-                break
-
-        model = genai.GenerativeModel(
-            'gemini-1.5-flash',
-            generation_config={"response_mime_type": "application/json"}
-        )
-        response = model.generate_content([prompt, file_info])
-        genai.delete_file(uploaded_file.name)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        headers = {'Content-Type': 'application/json'}
         
-        return json.loads(response.text)
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "application/pdf",
+                            "data": pdf_b64
+                        }
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        response_json = response.json()
+        
+        if response.status_code != 200:
+            error_msg = response_json.get("error", {}).get("message", "Неизвестная ошибка API")
+            return {}, f"Ошибка Google API: {error_msg}"
+            
+        # Достаем текст из ответа
+        text_result = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        text_result = text_result.replace("```json", "").replace("```", "").strip()
+        
+        return json.loads(text_result), None
     except Exception as e:
-        print(f"Ошибка ИИ для {filename}: {e}")
-        return {}
+        return {}, str(e)
 
 def main():
     print("Подключение к таблице...")
@@ -111,15 +121,15 @@ def main():
         try:
             with open(filename, 'wb') as f:
                 f.write(requests.get(download_url).content)
-        except Exception as e:
-            print(f"Не удалось скачать {filename}: {e}")
+        except Exception:
             continue
             
-        ai_data = parse_pdf_with_gemini(filename)
+        ai_data, error_msg = parse_pdf_direct(filename)
         
-        material_name = ai_data.get("material")
-        if not material_name:
-            material_name = filename
+        if error_msg:
+            material_name = f"🛑 ОШИБКА: {error_msg}"
+        else:
+            material_name = ai_data.get("material", filename)
             
         next_row = len(sheet.col_values(1)) + 1
         
@@ -139,8 +149,6 @@ def main():
         
         if os.path.exists(filename):
             os.remove(filename)
-            
-    print("\nГотово! Файлы обработаны.")
 
 if __name__ == '__main__':
     main()
