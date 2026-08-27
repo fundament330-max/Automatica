@@ -48,4 +48,4 @@ def parse_pdf_with_gemini(filename):
         response = model.generate_content([prompt, uploaded_file])
         genai.delete_file(uploaded_file.name)
         
-        text_res = response.text.replace("```json", "").replace("
+       text_res = response.text.replace("```json", "").replace("```", "").strip()
