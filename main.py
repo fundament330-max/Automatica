@@ -45,7 +45,7 @@ def get_folder_id_by_path(webhook, root_id):
             print(f"Не удалось найти папку: {folder_name}. Берем текущую корневую.")
             break
             
-    print(🎯 Итоговый ID найденной папки: {current_id})
+    print(f"🎯 Итоговый ID найденной папки: {current_id}")
     return current_id
 
 def parse_pdf_with_gemini(filename):
