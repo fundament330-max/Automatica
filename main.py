@@ -40,10 +40,20 @@ def parse_pdf_with_gemini(filename):
     Верни только эти 3 ключа. Если чего-то нет, пиши пустую строку "".
     """
     try:
+        # Загружаем файл
         uploaded_file = genai.upload_file(path=filename)
-        time.sleep(3) # Даем нейросети время на чтение файла
         
-        # Жестко заставляем модель отвечать только в JSON
+        # УМНОЕ ОЖИДАНИЕ: ждем, пока Гугл закончит обработку PDF
+        while uploaded_file.state.name == 'PROCESSING':
+            print("Ждем обработку файла Гуглом...")
+            time.sleep(2)
+            uploaded_file = genai.get_file(uploaded_file.name)
+            
+        if uploaded_file.state.name == 'FAILED':
+            print("Ошибка на серверах Гугла при чтении PDF.")
+            return {}
+
+        # Читаем данные
         model = genai.GenerativeModel(
             'gemini-1.5-flash',
             generation_config={"response_mime_type": "application/json"}
@@ -80,10 +90,10 @@ def main():
             print(f"Не удалось скачать {filename}")
             continue
             
-        # Нейросеть ищет только 3 сложных параметра
+        # Нейросеть ищет только 3 сложных параметра с умным ожиданием
         ai_data = parse_pdf_with_gemini(filename)
         
-        # А дату и материал берем из названия файла (работает на 100%)
+        # А дату и материал берем из названия файла
         clean_name = re.sub(r'\.(pdf|jpg|png|jpeg)$', '', filename, flags=re.IGNORECASE)
         date_str = ""
         material_name = clean_name
