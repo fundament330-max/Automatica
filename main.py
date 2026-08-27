@@ -2,6 +2,8 @@ import os
 import json
 import requests
 import gspread
+import re
+import time
 from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
 
@@ -14,12 +16,10 @@ GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196r
 # ==============================================
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
 
 def init_google_sheets():
     with open("google_creds.json", "w") as f:
         f.write(GOOGLE_CREDS_JSON)
-        
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
     client = gspread.authorize(creds)
@@ -32,31 +32,29 @@ def get_bitrix_files():
 
 def parse_pdf_with_gemini(filename):
     prompt = """
-    Ты опытный инженер ПТО. Изучи этот документ (паспорт качества/сертификат).
-    Извлеки из него данные и верни строго JSON объект с ключами:
-    - "date" (дата документа)
-    - "material" (наименование материала из документа)
-    - "supplier" (поставщик или изготовитель)
-    - "quantity" (объем/количество и ед. изм)
-    - "passport_no" (номер паспорта/сертификата)
+    Найди в этом паспорте качества 3 параметра:
+    - "supplier" (поставщик/изготовитель)
+    - "quantity" (количество/объем и ед. изм)
+    - "passport_no" (номер паспорта/документа)
     
-    Если каких-то данных нет на скане, укажи пустую строку "".
-    Отвечай ТОЛЬКО форматом JSON, без лишнего текста.
+    Верни только эти 3 ключа. Если чего-то нет, пиши пустую строку "".
     """
     try:
         uploaded_file = genai.upload_file(path=filename)
+        time.sleep(3) # Даем нейросети время на чтение файла
+        
+        # Жестко заставляем модель отвечать только в JSON
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash',
+            generation_config={"response_mime_type": "application/json"}
+        )
         response = model.generate_content([prompt, uploaded_file])
         genai.delete_file(uploaded_file.name)
         
-        text_res = response.text.replace("```json", "").replace("```", "").strip()
-        start = text_res.find("{")
-        end = text_res.rfind("}") + 1
-        if start != -1 and end != 0:
-            return json.loads(text_res[start:end])
+        return json.loads(response.text)
     except Exception as e:
-        print(f"Ошибка при анализе файла {filename}: {e}")
-        
-    return {}
+        print(f"Ошибка ИИ для {filename}: {e}")
+        return {}
 
 def main():
     print("Подключение к таблице...")
@@ -74,7 +72,7 @@ def main():
         if not download_url or file_url in existing_links or not filename.lower().endswith(('.pdf', '.jpg', '.png', '.jpeg')):
             continue
             
-        print(f"\nСкачиваем и анализируем: {filename}")
+        print(f"\nСкачиваем: {filename}")
         try:
             with open(filename, 'wb') as f:
                 f.write(requests.get(download_url).content)
@@ -82,26 +80,33 @@ def main():
             print(f"Не удалось скачать {filename}")
             continue
             
-        parsed_data = parse_pdf_with_gemini(filename)
+        # Нейросеть ищет только 3 сложных параметра
+        ai_data = parse_pdf_with_gemini(filename)
+        
+        # А дату и материал берем из названия файла (работает на 100%)
+        clean_name = re.sub(r'\.(pdf|jpg|png|jpeg)$', '', filename, flags=re.IGNORECASE)
+        date_str = ""
+        material_name = clean_name
+        
+        match = re.match(r"^(\d{4}\.\d{2}\.\d{2})\s*(.*)", clean_name)
+        if match:
+            date_str = match.group(1)
+            material_name = match.group(2)
         
         next_row = len(sheet.col_values(1)) + 1
         
-        material_name = parsed_data.get("material")
-        if not material_name:
-            material_name = filename
-            
         row_data = [[
             next_row - 1,
-            parsed_data.get("date", ""),
+            date_str,
             material_name,
-            parsed_data.get("supplier", ""),
-            parsed_data.get("quantity", ""),
-            parsed_data.get("passport_no", ""),
+            ai_data.get("supplier", ""),
+            ai_data.get("quantity", ""),
+            ai_data.get("passport_no", ""),
             "", "", "", "",
             file_url
         ]]
         
-        print(f"Записываем данные -> Поставщик: {parsed_data.get('supplier', 'Нет')}, Материал: {material_name}")
+        print(f"Запись: {material_name} | Поставщик: {ai_data.get('supplier')} | Кол-во: {ai_data.get('quantity')}")
         sheet.update(f'A{next_row}:K{next_row}', row_data)
         
         if os.path.exists(filename):
