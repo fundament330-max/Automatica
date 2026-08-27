@@ -43,32 +43,44 @@ def extract_text(filename):
         elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             text = pytesseract.image_to_string(Image.open(filename), lang='rus')
     except Exception as e:
-        print(f"Ошибка OCR: {e}")
+        print(f"Ошибка OCR для {filename}: {e}")
     return text
 
-def parse_with_gemini(text):
-    prompt = """
-    Извлеки данные из текста паспорта качества на строительный материал.
-    Ответь ТОЛЬКО в формате JSON. Без лишнего текста.
-    Если данных нет, ставь пустую строку "".
-    {
-      "date": "Дата документа в формате ДД.ММ.ГГГГ",
-      "material": "Наименование материала",
-      "supplier": "Поставщик",
-      "quantity": "Количество и ед. изм",
-      "passport_no": "Номер паспорта"
-    }
-    Текст: """
+def parse_with_gemini(text, filename):
+    prompt = f"""
+    Ты опытный инженер ПТО. Проанализируй текст паспорта качества и извлеки данные.
+    Верни строго JSON объект с такими ключами:
+    - "date" (дата документа)
+    - "material" (наименование материала)
+    - "supplier" (поставщик)
+    - "quantity" (количество)
+    - "passport_no" (номер паспорта)
+    
+    Если чего-то нет, укажи пустую строку "".
+    Имя файла для справки: {filename}
+    
+    Текст документа:
+    {text}
+    """
     try:
-        response = model.generate_content(prompt + text)
-        result = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(result)
-    except:
-        return {"date": "", "material": "", "supplier": "", "quantity": "", "passport_no": ""}
+        response = model.generate_content(prompt)
+        text_res = response.text.replace("```json", "").replace("```", "").strip()
+        # Ищем JSON в ответе
+        start = text_res.find("{")
+        end = text_res.rfind("}") + 1
+        if start != -1 and end != 0:
+            return json.loads(text_res[start:end])
+    except Exception as e:
+        print(f"Ошибка Gemini парсинга: {e}")
+    
+    return {"date": "", "material": filename, "supplier": "", "quantity": "", "passport_no": ""}
 
 def main():
+    print("Подключение к таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) 
+    existing_links = sheet.col_values(11) # Столбцы со ссылками
+    
+    print("Запрос файлов из Битрикса...")
     files = get_bitrix_files()
     
     for file_info in files:
@@ -79,19 +91,28 @@ def main():
         if not download_url or file_url in existing_links or not filename.lower().endswith(('.pdf', '.jpg', '.png', '.jpeg')):
             continue
             
-        with open(filename, 'wb') as f:
-            f.write(requests.get(download_url).content)
+        print(f"Скачиваем: {filename}")
+        try:
+            with open(filename, 'wb') as f:
+                f.write(requests.get(download_url).content)
+        except Exception as e:
+            print(f"Не удалось скачать {filename}: {e}")
+            continue
             
         raw_text = extract_text(filename)
-        parsed_data = parse_with_gemini(raw_text)
+        parsed_data = parse_with_gemini(raw_text, filename)
         
-        next_num = len(sheet.col_values(1))
+        # Определяем следующий номер строки
+        current_rows = sheet.get_all_values()
+        next_row = len(current_rows) + 1
         
-        # Собираем всю строку целиком от A до K и отправляем одним пакетом
+        # Защита от пустых названий материалами — подставим имя файла, если нейросеть растерялась
+        material_name = parsed_data.get("material") or filename
+        
         row_data = [
-            next_num,
+            next_row - 1,
             parsed_data.get("date", ""),
-            parsed_data.get("material", ""),
+            material_name,
             parsed_data.get("supplier", ""),
             parsed_data.get("quantity", ""),
             parsed_data.get("passport_no", ""),
@@ -99,8 +120,13 @@ def main():
             file_url
         ]
         
+        print(f"Записываем в строку {next_row}: {material_name}")
         sheet.append_row(row_data)
-        os.remove(filename)
+        
+        if os.path.exists(filename):
+            os.remove(filename)
+            
+    print("Готово! Все файлы обработаны.")
 
 if __name__ == '__main__':
     main()
