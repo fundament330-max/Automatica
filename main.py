@@ -8,7 +8,7 @@ from PIL import Image
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ================= НАСТРОЙКИ =================
-BITRIX_WEBHOOK = os.environ.get("BITRIX_WEBHOOK")
+BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
 FOLDER_ID = "131672" 
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
@@ -41,7 +41,6 @@ def extract_text_from_file(filename):
     return text
 
 def parse_passport_text(text, filename):
-    # Ищем дату в тексте или в названии файла
     date_match = re.search(r'\b(3[01]|[12][0-9]|0[1-9])\.(1[0-2]|0[1-9])\.(\d{4})\b|\b(\d{4})\.(0[1-9]|1[0-2])\.(3[01]|[12][0-9]|0[1-9])\b', text)
     date_str = date_match.group(0) if date_match else ""
     
@@ -50,20 +49,16 @@ def parse_passport_text(text, filename):
         if file_date_match:
             date_str = file_date_match.group(1)
 
-    # Ищем номер паспорта/сертификата
     passport_match = re.search(r'(?:паспорт[а-я]*|сертификат[а-я]*)\s*(?:№|с|качества)?[:\s]*([А-Яа-яA-Za-z0-9\-\/]+)', text, re.IGNORECASE)
     passport_no = passport_match.group(1) if passport_match else ""
 
-    # Ищем количество
     qty_match = re.search(r'(?:кол-во|количество|объем|масса)[:\s]*([0-9\.,]+\s*(?:м3|т|кг|шт|п\.м\.|мг))', text, re.IGNORECASE)
     quantity = qty_match.group(1) if qty_match else ""
 
-    # Наименование материала из имени файла (или очищенное)
     clean_name = re.sub(r'\.(pdf|jpg|png|jpeg)$', '', filename, flags=re.IGNORECASE)
     clean_name = re.sub(r'^\d{4}\.\d{2}\.\d{2}\s*', '', clean_name)
     material_name = clean_name
 
-    # Поставщик
     supplier = ""
     lines = text.split('\n')
     for line in lines:
