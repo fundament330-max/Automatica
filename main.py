@@ -25,11 +25,11 @@ def init_google_sheets():
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_folder_id_by_path(webhook, root_id):
-    # Теперь ищем названия точно, вместе с цифрами, и игнорируем папки с ошибками
-    target_path = ["5. ПАСПОРТА", "1. Конструкции железобетонные", "Бетон", "ЦОД А"]
+    # Ищем только по корням слов, чтобы обойти любые опечатки, пробелы и цифры
+    target_path = ["паспорт", "конструкц", "бетон", "цод"]
     current_id = root_id
     
-    for folder_name in target_path:
+    for keyword in target_path:
         url = f"{webhook}disk.folder.getchildren"
         response = requests.post(url, json={"id": current_id})
         items = response.json().get("result", [])
@@ -38,19 +38,19 @@ def get_folder_id_by_path(webhook, root_id):
         for item in items:
             name = item.get("NAME", "").lower()
             
-            # Блокируем папки с ошибками
+            # Жестко блокируем папку с ошибками
             if "ошибк" in name:
                 continue
                 
-            # Ищем совпадение
-            if folder_name.lower() in name:
+            # Ищем корень нужного слова в названии папки
+            if keyword in name:
                 current_id = item.get("ID")
                 found = True
-                print(f"📁 Зашли в папку: {item.get('NAME')}")
+                print(f"📁 Зашли в папку: {item.get('NAME')} (ID: {current_id})")
                 break
                 
         if not found:
-            print(f"❌ СТОП. Не удалось найти папку: {folder_name}")
+            print(f"❌ СТОП. Не удалось найти папку, содержащую слово: {keyword}")
             break
             
     print(f"🎯 Итоговый ID папки для сканирования: {current_id}")
