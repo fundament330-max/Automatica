@@ -44,12 +44,21 @@ def parse_pdf_with_gemini(filename):
     Отвечай ТОЛЬКО форматом JSON, без лишнего текста.
     """
     try:
-        # Загружаем файл напрямую в Gemini (нейросеть сама прочитает скан!)
         uploaded_file = genai.upload_file(path=filename)
-        
-        # Просим проанализировать
         response = model.generate_content([prompt, uploaded_file])
+        genai.delete_file(uploaded_file.name)
         
+        # Вот эта строка, которая оборвалась:
+        text_res = response.text.replace("```json", "").replace("```", "").strip()
+        
+        start = text_res.find("{")
+        end = text_res.rfind("}") + 1
+        if start != -1 and end != 0:
+            return json.loads(text_res[start:end])
+    except Exception as e:
+        print(f"Ошибка при анализе файла {filename}: {e}")
+        
+    return {}
         # Удаляем файл с серверов Gemini после анализа
         genai.delete_file(uploaded_file.name)
         
