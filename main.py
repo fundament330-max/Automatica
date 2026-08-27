@@ -48,4 +48,66 @@ def parse_pdf_with_gemini(filename):
         response = model.generate_content([prompt, uploaded_file])
         genai.delete_file(uploaded_file.name)
         
-       text_res = response.text.replace("```json", "").replace("```", "").strip()
+        text_res = response.text.replace("```json", "").replace("```", "").strip()
+        start = text_res.find("{")
+        end = text_res.rfind("}") + 1
+        if start != -1 and end != 0:
+            return json.loads(text_res[start:end])
+    except Exception as e:
+        print(f"Ошибка при анализе файла {filename}: {e}")
+        
+    return {}
+
+def main():
+    print("Подключение к таблице...")
+    sheet = init_google_sheets()
+    existing_links = sheet.col_values(11) 
+    
+    print("Запрос файлов из Битрикса...")
+    files = get_bitrix_files()
+    
+    for file_info in files:
+        filename = file_info.get("NAME")
+        file_url = file_info.get("DETAIL_URL")
+        download_url = file_info.get("DOWNLOAD_URL")
+        
+        if not download_url or file_url in existing_links or not filename.lower().endswith(('.pdf', '.jpg', '.png', '.jpeg')):
+            continue
+            
+        print(f"\nСкачиваем и анализируем: {filename}")
+        try:
+            with open(filename, 'wb') as f:
+                f.write(requests.get(download_url).content)
+        except Exception as e:
+            print(f"Не удалось скачать {filename}")
+            continue
+            
+        parsed_data = parse_pdf_with_gemini(filename)
+        
+        next_row = len(sheet.col_values(1)) + 1
+        
+        material_name = parsed_data.get("material")
+        if not material_name:
+            material_name = filename
+            
+        row_data = [[
+            next_row - 1,
+            parsed_data.get("date", ""),
+            material_name,
+            parsed_data.get("supplier", ""),
+            parsed_data.get("quantity", ""),
+            parsed_data.get("passport_no", ""),
+            "", "", "", "",
+            file_url
+        ]]
+        
+        print(f"Записываем данные -> Поставщик: {parsed_data.get('supplier', 'Нет')}, Материал: {material_name}")
+        sheet.update(f'A{next_row}:K{next_row}', row_data)
+        
+        if os.path.exists(filename):
+            os.remove(filename)
+            
+    print("\nГотово! Все файлы обработаны.")
+
+if __name__ == '__main__':
+    main()
