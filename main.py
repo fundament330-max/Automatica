@@ -2,7 +2,6 @@ import os
 import json
 import requests
 import gspread
-import re
 import time
 from oauth2client.service_account import ServiceAccountCredentials
 import google.generativeai as genai
@@ -32,31 +31,32 @@ def get_bitrix_files():
 
 def parse_pdf_with_gemini(filename):
     prompt = """
-    Ты инженер ПТО. Прочитай этот строительный паспорт качества/сертификат.
-    Найди 3 параметра:
-    - "supplier" (поставщик/изготовитель)
-    - "quantity" (объем/количество и единицы измерения)
-    - "passport_no" (номер документа/паспорта)
+    Ты опытный инженер ПТО. Внимательно изучи этот документ (паспорт качества/сертификат).
+    Извлеки из текста внутри документа следующие данные:
+    - "date": дата выдачи документа (в формате ДД.ММ.ГГГГ или ГГГГ.ММ.ДД)
+    - "material": наименование строительного материала или изделия
+    - "supplier": наименование поставщика или завода-изготовителя
+    - "quantity": количество/объем и единицы измерения (например, 50 м3, 120 шт)
+    - "passport_no": номер паспорта или сертификата качества
     
-    Верни ТОЛЬКО JSON с этими 3 ключами. Если данных нет, ставь "".
+    Верни результат СТРОГО в формате JSON с этими 5 ключами. Если какого-то параметра нет в тексте, оставь пустую строку "". Не пиши ничего, кроме JSON.
     """
     try:
         print(f"Загружаем {filename} в нейросеть...")
         uploaded_file = genai.upload_file(path=filename)
         
-        # Ждем, пока Гугл "прочитает" скан (защита от ошибок)
+        # Ждем, пока Гугл обработает файл
         while True:
             file_info = genai.get_file(uploaded_file.name)
             if file_info.state.name == 'PROCESSING':
-                print("Ждем... файл обрабатывается...")
+                print("Ждем обработку файла Гуглом...")
                 time.sleep(2)
             elif file_info.state.name == 'FAILED':
-                print("Гугл не смог прочитать этот PDF.")
+                print("Ошибка обработки файла на серверах Гугла.")
                 return {}
             else:
                 break
 
-        # Жестко требуем JSON
         model = genai.GenerativeModel(
             'gemini-1.5-flash',
             generation_config={"response_mime_type": "application/json"}
@@ -92,24 +92,19 @@ def main():
             print(f"Не удалось скачать {filename}")
             continue
             
-        # Нейросеть достает поставщика, количество и номер изнутри файла
+        # Достаем ВСЕ данные строго изнутри файла через нейросеть
         ai_data = parse_pdf_with_gemini(filename)
         
-        # Дату и материал берем безотказно из названия файла
-        clean_name = re.sub(r'\.(pdf|jpg|png|jpeg)$', '', filename, flags=re.IGNORECASE)
-        date_str = ""
-        material_name = clean_name
-        
-        match = re.match(r"^(\d{4}\.\d{2}\.\d{2})\s*(.*)", clean_name)
-        if match:
-            date_str = match.group(1)
-            material_name = match.group(2)
-        
+        # Страховка: если нейросеть совсем не смогла прочитать материал, подставим имя файла
+        material_name = ai_data.get("material")
+        if not material_name:
+            material_name = filename
+            
         next_row = len(sheet.col_values(1)) + 1
         
         row_data = [[
             next_row - 1,
-            date_str,
+            ai_data.get("date", ""),
             material_name,
             ai_data.get("supplier", ""),
             ai_data.get("quantity", ""),
@@ -118,15 +113,14 @@ def main():
             file_url
         ]]
         
-        print(f"Запись: {material_name} | Поставщик: {ai_data.get('supplier')} | Кол-во: {ai_data.get('quantity')}")
+        print(f"Запись: {material_name} | Дата: {ai_data.get('date')} | Поставщик: {ai_data.get('supplier')} | Кол-во: {ai_data.get('quantity')}")
         
-        # Запись в таблицу правильным синтаксисом (без желтых ошибок)
         sheet.update(values=row_data, range_name=f'A{next_row}:K{next_row}')
         
         if os.path.exists(filename):
             os.remove(filename)
             
-    print("\nГотово! Реестр собран полностью.")
+    print("\nГотово! Все данные извлечены из документов.")
 
 if __name__ == '__main__':
     main()
