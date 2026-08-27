@@ -2,8 +2,9 @@ import os
 import json
 import requests
 import gspread
-import base64
+import time
 from oauth2client.service_account import ServiceAccountCredentials
+import google.generativeai as genai
 
 # ================= НАСТРОЙКИ =================
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
@@ -12,6 +13,8 @@ GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
 # ==============================================
+
+genai.configure(api_key=GEMINI_API_KEY)
 
 def init_google_sheets():
     with open("google_creds.json", "w") as f:
@@ -22,7 +25,7 @@ def init_google_sheets():
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_folder_id_by_path(webhook, root_id):
-    # ИЩЕМ СТРОГО ПО НАЗВАНИЮ, чтобы не залезть в "Паспорта с ошибками"
+    # Теперь ищем названия точно, вместе с цифрами, и игнорируем папки с ошибками
     target_path = ["5. ПАСПОРТА", "1. Конструкции железобетонные", "Бетон", "ЦОД А"]
     current_id = root_id
     
@@ -33,24 +36,31 @@ def get_folder_id_by_path(webhook, root_id):
         
         found = False
         for item in items:
-            if item.get("NAME", "").strip().lower() == folder_name.lower():
+            name = item.get("NAME", "").lower()
+            
+            # Блокируем папки с ошибками
+            if "ошибк" in name:
+                continue
+                
+            # Ищем совпадение
+            if folder_name.lower() in name:
                 current_id = item.get("ID")
                 found = True
-                print(f"📁 Нашли папку: {item.get('NAME')}")
+                print(f"📁 Зашли в папку: {item.get('NAME')}")
                 break
                 
         if not found:
-            print(f"❌ Не удалось найти точную папку: {folder_name}")
+            print(f"❌ СТОП. Не удалось найти папку: {folder_name}")
             break
             
     print(f"🎯 Итоговый ID папки для сканирования: {current_id}")
     return current_id
 
-def parse_pdf_direct(filename):
+def parse_pdf_with_gemini(filename):
     prompt = """
     Ты инженер ПТО. Проанализируй этот документ.
     Извлеки и верни строго JSON объект с полями:
-    - "date": дата документа (ДД.ММ.ГГГГ или ГГГГ.ММ.ДД).
+    - "date": дата документа (ДД.ММ.ГГГГ).
     - "material": точное наименование материала.
     - "supplier": завод-изготовитель или поставщик.
     - "quantity": ТОЛЬКО количественное значение с единицей измерения.
@@ -58,43 +68,29 @@ def parse_pdf_direct(filename):
     Если параметра нет, оставь "". Ответ строго в формате JSON без разметки markdown.
     """
     try:
-        with open(filename, "rb") as f:
-            pdf_data = f.read()
-            
-        pdf_b64 = base64.b64encode(pdf_data).decode('utf-8')
+        # Используем правильную загрузку файла для Gemini
+        uploaded_file = genai.upload_file(path=filename)
         
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        headers = {'Content-Type': 'application/json'}
+        # Ждем, пока Гугл "переварит" PDF
+        while True:
+            file_info = genai.get_file(uploaded_file.name)
+            if file_info.state.name == 'PROCESSING':
+                time.sleep(2)
+            elif file_info.state.name == 'FAILED':
+                return {}, "Гугл не смог прочитать этот PDF файл"
+            else:
+                break
+
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash',
+            generation_config={"response_mime_type": "application/json"}
+        )
+        response = model.generate_content([prompt, file_info])
         
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "application/pdf",
-                            "data": pdf_b64
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "responseMimeType": "application/json"
-            }
-        }
+        # Удаляем файл из облака Гугла после проверки
+        genai.delete_file(uploaded_file.name)
         
-        response = requests.post(url, headers=headers, json=payload)
-        response_json = response.json()
-        
-        if response.status_code != 200:
-            error_msg = response_json.get("error", {}).get("message", "Неизвестная ошибка API")
-            return {}, f"Ошибка Google API: {error_msg}"
-            
-        # Достаем текст из ответа
-        text_result = response_json["candidates"][0]["content"]["parts"][0]["text"]
-        text_result = text_result.replace("```json", "").replace("```", "").strip()
-        
-        return json.loads(text_result), None
+        return json.loads(response.text), None
     except Exception as e:
         return {}, str(e)
 
@@ -124,10 +120,11 @@ def main():
         except Exception:
             continue
             
-        ai_data, error_msg = parse_pdf_direct(filename)
+        ai_data, error_msg = parse_pdf_with_gemini(filename)
         
+        # Запись ошибки прямо в таблицу, если она будет
         if error_msg:
-            material_name = f"🛑 ОШИБКА: {error_msg}"
+            material_name = f"🛑 ОШИБКА ИИ: {error_msg}"
         else:
             material_name = ai_data.get("material", filename)
             
@@ -149,6 +146,8 @@ def main():
         
         if os.path.exists(filename):
             os.remove(filename)
+            
+    print("\nГотово!")
 
 if __name__ == '__main__':
     main()
