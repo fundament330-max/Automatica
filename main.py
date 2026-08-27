@@ -1,18 +1,20 @@
 import os
-import re
+import json
 import requests
 import gspread
-import pytesseract
-from pdf2image import convert_from_path
-from PIL import Image
+import time
 from oauth2client.service_account import ServiceAccountCredentials
+import google.generativeai as genai
 
 # ================= НАСТРОЙКИ =================
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
-FOLDER_ID = "131672" 
+ROOT_FOLDER_ID = "131672" # Корневая папка ПТО
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
 # ==============================================
+
+genai.configure(api_key=GEMINI_API_KEY)
 
 def init_google_sheets():
     with open("google_creds.json", "w") as f:
@@ -22,66 +24,77 @@ def init_google_sheets():
     client = gspread.authorize(creds)
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
-def get_bitrix_files():
-    url = f"{BITRIX_WEBHOOK}disk.folder.getchildren"
-    response = requests.post(url, json={"id": FOLDER_ID})
-    return response.json().get("result", [])
-
-def extract_text_from_file(filename):
-    text = ""
-    try:
-        if filename.lower().endswith('.pdf'):
-            images = convert_from_path(filename)
-            for img in images:
-                text += pytesseract.image_to_string(img, lang='rus+eng') + "\n"
-        elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            text = pytesseract.image_to_string(Image.open(filename), lang='rus+eng')
-    except Exception as e:
-        print(f"Ошибка OCR для {filename}: {e}")
-    return text
-
-def parse_passport_text(text, filename):
-    date_match = re.search(r'\b(3[01]|[12][0-9]|0[1-9])\.(1[0-2]|0[1-9])\.(\d{4})\b|\b(\d{4})\.(0[1-9]|1[0-2])\.(3[01]|[12][0-9]|0[1-9])\b', text)
-    date_str = date_match.group(0) if date_match else ""
+def get_folder_id_by_path(webhook, root_id):
+    """Автоматически ищет нужную папку «ЦОД А» по иерархии"""
+    target_path = ["5. ПАСПОРТА", "Конструкции железобетонные", "Бетон", "ЦОД А"]
+    current_id = root_id
     
-    if not date_str:
-        file_date_match = re.search(r'(\d{4}\.\d{2}\.\d{2})', filename)
-        if file_date_match:
-            date_str = file_date_match.group(1)
+    for folder_name in target_path:
+        url = f"{webhook}disk.folder.getchildren"
+        response = requests.post(url, json={"id": current_id})
+        items = response.json().get("result", [])
+        
+        found = False
+        for item in items:
+            # Ищем совпадение по имени (без учета регистра и пробелов)
+            if item.get("NAME", "").strip().lower() == folder_name.lower():
+                current_id = item.get("ID")
+                found = True
+                break
+        if not found:
+            print(f"Не удалось найти папку: {folder_name}. Берем текущую корневую.")
+            break
+            
+    print(🎯 Итоговый ID найденной папки: {current_id})
+    return current_id
 
-    passport_match = re.search(r'(?:паспорт[а-я]*|сертификат[а-я]*)\s*(?:№|с|качества)?[:\s]*([А-Яа-яA-Za-z0-9\-\/]+)', text, re.IGNORECASE)
-    passport_no = passport_match.group(1) if passport_match else ""
+def parse_pdf_with_gemini(filename):
+    prompt = """
+    Ты профессиональный инженер ПТО. Проанализируй этот документ (паспорт качества или сертификат).
+    Извлеки и верни строго JSON объект с полями:
+    - "date": дата документа (ДД.ММ.ГГГГ или ГГГГ.ММ.ДД).
+    - "material": точное наименование материала или изделия.
+    - "supplier": завод-изготовитель или поставщик (только название организации).
+    - "quantity": ТОЛЬКО количественное значение с единицей измерения (например: "50 шт", "12.5 м3", "300 т"). Только цифры и единица, без лишних слов.
+    - "passport_no": ТОЛЬКО номер паспорта или сертификата (конкретная цифра или буквенно-цифровой индекс, например "4278", "№ 54"). Никаких слов вроде "Соответствия".
 
-    qty_match = re.search(r'(?:кол-во|количество|объем|масса)[:\s]*([0-9\.,]+\s*(?:м3|т|кг|шт|п\.м\.|мг))', text, re.IGNORECASE)
-    quantity = qty_match.group(1) if qty_match else ""
-
-    clean_name = re.sub(r'\.(pdf|jpg|png|jpeg)$', '', filename, flags=re.IGNORECASE)
-    clean_name = re.sub(r'^\d{4}\.\d{2}\.\d{2}\s*', '', clean_name)
-    material_name = clean_name
-
-    supplier = ""
-    lines = text.split('\n')
-    for line in lines:
-        if any(w in line.lower() for w in ['изготовитель', 'поставщик', 'завод', 'ооо', 'ао', 'пао']):
-            if len(line.strip()) > 5:
-                supplier = line.strip()
+    Если параметра нет, оставь "". Ответ строго в формате JSON.
+    """
+    try:
+        print(f"Загружаем {filename} для анализа ИИ...")
+        uploaded_file = genai.upload_file(path=filename)
+        
+        while True:
+            file_info = genai.get_file(uploaded_file.name)
+            if file_info.state.name == 'PROCESSING':
+                time.sleep(2)
+            elif file_info.state.name == 'FAILED':
+                return {}
+            else:
                 break
 
-    return {
-        "date": date_str,
-        "material": material_name,
-        "supplier": supplier,
-        "quantity": quantity,
-        "passport_no": passport_no
-    }
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash',
+            generation_config={"response_mime_type": "application/json"}
+        )
+        response = model.generate_content([prompt, file_info])
+        genai.delete_file(uploaded_file.name)
+        
+        return json.loads(response.text)
+    except Exception as e:
+        print(f"Ошибка ИИ для {filename}: {e}")
+        return {}
 
 def main():
     print("Подключение к таблице...")
     sheet = init_google_sheets()
     existing_links = sheet.col_values(11) 
     
-    print("Запрос файлов из Битрикса...")
-    files = get_bitrix_files()
+    print("Поиск нужной папки в Битриксе...")
+    target_folder_id = get_folder_id_by_path(BITRIX_WEBHOOK, ROOT_FOLDER_ID)
+    
+    url = f"{BITRIX_WEBHOOK}disk.folder.getchildren"
+    files = requests.post(url, json={"id": target_folder_id}).json().get("result", [])
     
     for file_info in files:
         filename = file_info.get("NAME", "")
@@ -91,7 +104,7 @@ def main():
         if not download_url or file_url in existing_links or not filename.lower().endswith(('.pdf', '.jpg', '.png', '.jpeg')):
             continue
             
-        print(f"\nОбработка файла: {filename}")
+        print(f"\nСкачиваем: {filename}")
         try:
             with open(filename, 'wb') as f:
                 f.write(requests.get(download_url).content)
@@ -99,29 +112,32 @@ def main():
             print(f"Не удалось скачать {filename}: {e}")
             continue
             
-        raw_text = extract_text_from_file(filename)
-        data = parse_passport_text(raw_text, filename)
+        ai_data = parse_pdf_with_gemini(filename)
         
+        material_name = ai_data.get("material")
+        if not material_name:
+            material_name = filename
+            
         next_row = len(sheet.col_values(1)) + 1
         
         row_data = [[
             next_row - 1,
-            data["date"],
-            data["material"],
-            data["supplier"],
-            data["quantity"],
-            data["passport_no"],
+            ai_data.get("date", ""),
+            material_name,
+            ai_data.get("supplier", ""),
+            ai_data.get("quantity", ""),
+            ai_data.get("passport_no", ""),
             "", "", "", "",
             file_url
         ]]
         
-        print(f"Запись -> Дата: {data['date']} | Материал: {data['material']} | Паспорт: {data['passport_no']}")
+        print(f"Запись -> Кол-во: {ai_data.get('quantity')} | Паспорт: {ai_data.get('passport_no')}")
         sheet.update(values=row_data, range_name=f'A{next_row}:K{next_row}')
         
         if os.path.exists(filename):
             os.remove(filename)
             
-    print("\nГотово! Реестр собран.")
+    print("\nГотово! Файлы из папки ЦОД А обработаны.")
 
 if __name__ == '__main__':
     main()
