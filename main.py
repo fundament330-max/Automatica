@@ -43,7 +43,7 @@ def extract_text(filename):
         elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             text = pytesseract.image_to_string(Image.open(filename), lang='rus')
     except Exception as e:
-        print(f"Ошибка OCR для {filename}: {e}")
+        print(f"Ошибка OCR: {e}")
     return text
 
 def parse_with_gemini(text, filename):
@@ -65,7 +65,6 @@ def parse_with_gemini(text, filename):
     try:
         response = model.generate_content(prompt)
         text_res = response.text.replace("```json", "").replace("```", "").strip()
-        # Ищем JSON в ответе
         start = text_res.find("{")
         end = text_res.rfind("}") + 1
         if start != -1 and end != 0:
@@ -78,7 +77,7 @@ def parse_with_gemini(text, filename):
 def main():
     print("Подключение к таблице...")
     sheet = init_google_sheets()
-    existing_links = sheet.col_values(11) # Столбцы со ссылками
+    existing_links = sheet.col_values(11) 
     
     print("Запрос файлов из Битрикса...")
     files = get_bitrix_files()
@@ -102,14 +101,12 @@ def main():
         raw_text = extract_text(filename)
         parsed_data = parse_with_gemini(raw_text, filename)
         
-        # Определяем следующий номер строки
-        current_rows = sheet.get_all_values()
-        next_row = len(current_rows) + 1
-        
-        # Защита от пустых названий материалами — подставим имя файла, если нейросеть растерялась
+        # Жестко вычисляем номер следующей строки ТОЛЬКО по колонке А
+        next_row = len(sheet.col_values(1)) + 1
         material_name = parsed_data.get("material") or filename
         
-        row_data = [
+        # Собираем данные в виде массива внутри массива (требование метода update)
+        row_data = [[
             next_row - 1,
             parsed_data.get("date", ""),
             material_name,
@@ -118,10 +115,11 @@ def main():
             parsed_data.get("passport_no", ""),
             "", "", "", "",
             file_url
-        ]
+        ]]
         
-        print(f"Записываем в строку {next_row}: {material_name}")
-        sheet.append_row(row_data)
+        print(f"Записываем в координаты A{next_row}:K{next_row} -> {material_name}")
+        # Жестко бьем в конкретные координаты ячеек
+        sheet.update(f'A{next_row}:K{next_row}', row_data)
         
         if os.path.exists(filename):
             os.remove(filename)
