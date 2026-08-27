@@ -8,7 +8,7 @@ import google.generativeai as genai
 
 # ================= НАСТРОЙКИ =================
 BITRIX_WEBHOOK = "https://nefteresurs.bitrix24.ru/rest/752/yc6s3l7fghnba6h0/"
-ROOT_FOLDER_ID = "131672" 
+ROOT_FOLDER_ID = "131672" # ЭТО УЖЕ ПАПКА "5. ПАСПОРТА"
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1znszruyFQu9AuXpe196rtBfLYB86MfFbnhZpSMsxgxE/edit"
@@ -25,8 +25,8 @@ def init_google_sheets():
     return client.open_by_url(GOOGLE_SHEET_URL).sheet1
 
 def get_folder_id_by_path(webhook, root_id):
-    # Ищем только по корням слов, чтобы обойти любые опечатки, пробелы и цифры
-    target_path = ["паспорт", "конструкц", "бетон", "цод"]
+    # МЫ УЖЕ В ПАПКЕ "5. ПАСПОРТА". ИДЕМ СРАЗУ В КОНСТРУКЦИИ!
+    target_path = ["конструкц", "бетон", "цод"]
     current_id = root_id
     
     for keyword in target_path:
@@ -38,19 +38,17 @@ def get_folder_id_by_path(webhook, root_id):
         for item in items:
             name = item.get("NAME", "").lower()
             
-            # Жестко блокируем папку с ошибками
             if "ошибк" in name:
                 continue
                 
-            # Ищем корень нужного слова в названии папки
             if keyword in name:
                 current_id = item.get("ID")
                 found = True
-                print(f"📁 Зашли в папку: {item.get('NAME')} (ID: {current_id})")
+                print(f"📁 Зашли в папку: {item.get('NAME')}")
                 break
                 
         if not found:
-            print(f"❌ СТОП. Не удалось найти папку, содержащую слово: {keyword}")
+            print(f"❌ СТОП. Не удалось найти папку со словом: {keyword}")
             break
             
     print(f"🎯 Итоговый ID папки для сканирования: {current_id}")
@@ -68,10 +66,8 @@ def parse_pdf_with_gemini(filename):
     Если параметра нет, оставь "". Ответ строго в формате JSON без разметки markdown.
     """
     try:
-        # Используем правильную загрузку файла для Gemini
         uploaded_file = genai.upload_file(path=filename)
         
-        # Ждем, пока Гугл "переварит" PDF
         while True:
             file_info = genai.get_file(uploaded_file.name)
             if file_info.state.name == 'PROCESSING':
@@ -86,8 +82,6 @@ def parse_pdf_with_gemini(filename):
             generation_config={"response_mime_type": "application/json"}
         )
         response = model.generate_content([prompt, file_info])
-        
-        # Удаляем файл из облака Гугла после проверки
         genai.delete_file(uploaded_file.name)
         
         return json.loads(response.text), None
@@ -122,7 +116,6 @@ def main():
             
         ai_data, error_msg = parse_pdf_with_gemini(filename)
         
-        # Запись ошибки прямо в таблицу, если она будет
         if error_msg:
             material_name = f"🛑 ОШИБКА ИИ: {error_msg}"
         else:
